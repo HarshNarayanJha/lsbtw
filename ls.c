@@ -5,7 +5,68 @@
 #include <pwd.h>
 #include <stdio.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
+
+int show_all = 0;
+int show_long = 0;
+
+struct stat *get_file_stat(const char *dir, const char *name, struct stat *sp) {
+  char fullpath[4096];
+  snprintf(fullpath, sizeof(fullpath), "%s/%s", dir, name);
+
+  if (lstat(fullpath, sp) < 0) {
+    perror("lstat");
+    return NULL;
+  }
+
+  return sp;
+}
+
+long get_dir_meta(const char *path, unsigned long *max_size_len,
+                  unsigned long *total_size) {
+
+  DIR *dir = opendir(path);
+  if (!dir) {
+    closedir(dir);
+    perror("opendir");
+    return -1;
+  }
+
+  errno = 0;
+  long items = 0;
+
+  struct dirent *entry;
+  while ((entry = readdir(dir))) {
+    if (!show_all && entry->d_name[0] == '.')
+      continue;
+
+    struct stat sp;
+    if (!get_file_stat(path, entry->d_name, &sp))
+      continue;
+
+    unsigned long len = 0;
+    unsigned long size = sp.st_size;
+    while (size > 0) {
+      size /= 10;
+      len++;
+    }
+
+    *max_size_len = len > *max_size_len ? len : *max_size_len;
+    *total_size += sp.st_size;
+
+    items++;
+  }
+
+  if (errno != 0) {
+    closedir(dir);
+    perror("readdir");
+    return -1;
+  }
+
+  closedir(dir);
+  return items;
+}
 
 void mode_string(mode_t mode, char *str) {
   if (S_ISDIR(mode))
@@ -37,32 +98,35 @@ void mode_string(mode_t mode, char *str) {
   str[10] = '\0';
 }
 
-void print_long(const char *dir, const char *name) {
-  char fullpath[4096];
-  snprintf(fullpath, sizeof(fullpath), "%s/%s", dir, name);
-
-  struct stat sb;
-  if (lstat(fullpath, &sb) < 0) {
-    perror("lstat");
+void print_long(const char *dir, const char *name, const int max_size_len) {
+  struct stat sp;
+  if (!get_file_stat(dir, name, &sp))
     return;
-  };
 
-  char mode[11];
-  mode_string(sb.st_mode, mode);
+  char modes[11];
+  mode_string(sp.st_mode, modes);
 
-  struct passwd *pwd = getpwuid(sb.st_uid);
-  struct group *grp = getgrgid(sb.st_gid);
+  struct passwd *pwd = getpwuid(sp.st_uid);
+  struct group *grp = getgrgid(sp.st_gid);
 
   const char *user = pwd ? pwd->pw_name : "???";
   const char *group = grp ? grp->gr_name : "???";
 
-  long size = sb.st_size;
+  time_t now_t = time(NULL);
+  struct tm now = *localtime(&now_t);
 
-  printf("%s %s %s %ld %s\n", mode, user, group, size, name);
+  char timebuf[32];
+  struct tm tp = *localtime(&sp.st_mtim.tv_sec);
+
+  if (tp.tm_year == now.tm_year) {
+    strftime(timebuf, sizeof(timebuf), "%b %e %H:%M", &tp);
+  } else {
+    strftime(timebuf, sizeof(timebuf), "%b %e  %Y", &tp);
+  }
+
+  printf("%s %lu %s %s %*ld %s  %s\n", modes, sp.st_nlink, user, group,
+         max_size_len, sp.st_size, timebuf, name);
 }
-
-int show_all = 0;
-int show_long = 0;
 
 int main(int argc, char *argv[]) {
   int opt;
@@ -75,12 +139,22 @@ int main(int argc, char *argv[]) {
       show_long = 1;
       break;
     default:
-      fprintf(stderr, "Usage: %s [-a] [path]\n", argv[0]);
+      fprintf(stderr, "Usage: %s [-al] [path]\n", argv[0]);
       return 1;
     }
   }
 
   const char *path = (optind < argc) ? argv[optind] : ".";
+
+  unsigned long max_size_len = 0, total_size = 0;
+  long items = 0;
+  if (show_long) {
+    if ((items = get_dir_meta(path, &max_size_len, &total_size)) == -1) {
+      return 1;
+    }
+
+    printf("items %lu total %lu\n", items, total_size);
+  }
 
   DIR *dir = opendir(path);
   if (!dir) {
@@ -96,7 +170,7 @@ int main(int argc, char *argv[]) {
       continue;
 
     if (show_long)
-      print_long(path, entry->d_name);
+      print_long(path, entry->d_name, max_size_len);
     else
       printf("%s\n", entry->d_name);
   }
