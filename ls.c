@@ -3,6 +3,7 @@
 #include <error.h>
 #include <grp.h>
 #include <pwd.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <sys/stat.h>
 #include <time.h>
@@ -28,7 +29,6 @@ long get_dir_meta(const char *path, unsigned long *max_size_len,
 
   DIR *dir = opendir(path);
   if (!dir) {
-    closedir(dir);
     perror("opendir");
     return -1;
   }
@@ -45,12 +45,9 @@ long get_dir_meta(const char *path, unsigned long *max_size_len,
     if (!get_file_stat(path, entry->d_name, &sp))
       continue;
 
-    unsigned long len = 0;
-    unsigned long size = sp.st_size;
-    while (size > 0) {
-      size /= 10;
+    unsigned long len = 1;
+    for (off_t s = sp.st_size; s >= 10; s /= 10)
       len++;
-    }
 
     *max_size_len = len > *max_size_len ? len : *max_size_len;
     *total_size += sp.st_size;
@@ -124,8 +121,8 @@ void print_long(const char *dir, const char *name, const int max_size_len) {
     strftime(timebuf, sizeof(timebuf), "%b %e  %Y", &tp);
   }
 
-  printf("%s %lu %s %s %*ld %s  %s\n", modes, sp.st_nlink, user, group,
-         max_size_len, sp.st_size, timebuf, name);
+  printf("%s %jd %s %s %*ju %s  %s\n", modes, (uintmax_t)sp.st_nlink, user,
+         group, max_size_len, (uintmax_t)sp.st_size, timebuf, name);
 }
 
 int main(int argc, char *argv[]) {
